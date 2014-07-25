@@ -239,5 +239,5 @@ void klgd_timer_fired(unsigned long ctx)
 		atomic_set(&priv->send_asap, 1);
 	}
 
-	klgd_schedule_update(ctx);
+	klgd_schedule_update(m);
 }

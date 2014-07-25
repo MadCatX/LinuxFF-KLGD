@@ -15,7 +15,7 @@ struct klgd_main {
 struct klgd_plugin {
 	struct klgd_plugin_private *private;
 
-	void (*deinit)(struct klgd_plugin *ctx, void *data);
+	void (*deinit)(struct klgd_plugin *ctx);
 	struct klgd_command_stream *(*get_commands)(struct klgd_plugin *ctx, const unsigned long now);
 	bool (*get_update_time)(struct klgd_plugin *ctx, const unsigned long now, unsigned long *t);
 	int (*init)(struct klgd_plugin *ctx, void *data);
@@ -23,7 +23,7 @@ struct klgd_plugin {
 	int (*post_event)(struct klgd_plugin *ctx, void *data);
 };
 
-void klgd_deinit(struct klgd_main *ctx, void *data);
+void klgd_deinit(struct klgd_main *ctx);
 int klgd_init(struct klgd_main *ctx, void *dev_ctx, int (*callback)(void *, struct klgd_command_stream *), const unsigned long plugin_count);
 void klgd_notify_commands_sent(struct klgd_main *ctx);
 int klgd_post_event(struct klgd_main *ctx, const size_t idx, void *data);

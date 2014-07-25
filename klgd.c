@@ -82,6 +82,23 @@ void klgd_free_stream(struct klgd_command_stream *s)
 	}
 }
 
+void klgd_deinit(struct klgd_main *ctx)
+{
+	struct klgd_main_private *priv = ctx->private;
+	size_t idx;
+
+	for (idx = 0; idx < priv->plugin_count; idx++) {
+		struct klgd_plugin *plugin = priv->plugins[idx];
+
+		plugin->deinit(plugin);
+		kfree(plugin);
+	}
+	kfree(priv->plugins);
+
+	kfree(priv);
+	kfree(ctx);
+}
+
 int klgd_init(struct klgd_main *ctx, void *dev_ctx, int (*callback)(void *, struct klgd_command_stream *), const size_t plugin_count)
 {
 	struct klgd_main_private *priv = ctx->private;

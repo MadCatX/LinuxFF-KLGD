@@ -25,5 +25,6 @@ struct klgd_plugin {
 
 void klgd_deinit(struct klgd_main *ctx, void *data);
 int klgd_init(struct klgd_main *ctx, void *dev_ctx, int (*callback)(void *, struct klgd_command_stream *), const unsigned long plugin_count);
+void klgd_notify_commands_sent(struct klgd_main *ctx);
 int klgd_post_event(struct klgd_main *ctx, const size_t idx, void *data);
 int klgd_register_plugin(struct klgd_main *ctx, const size_t idx, struct klgd_plugin *plugin);

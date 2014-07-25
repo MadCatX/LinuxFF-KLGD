@@ -1,3 +1,7 @@
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR("Michal \"MadCatX\" Maly");
+MODULE_DESCRIPTION("Pluginable framework of helper functions to handle gaming devices");
+
 struct klgd_command {
 	const char *bytes;
 	size_t length;

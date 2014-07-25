@@ -131,12 +131,16 @@ void klgd_notify_commands_sent(struct klgd_main *ctx)
 	if (atomic_read(&priv->send_asap)) {
 		unsigned long flags;
 
+		pr_debug("Command stream processed, send a new one immediately\n");
+
 		spin_lock_irqsave(&priv->stream_lock, flags);
 		klgd_build_command_stream(ctx);
 		spin_unlock_irqrestore(&priv->stream_lock, flags);
 		atomic_set(&priv->send_asap, 0);
-	} else
+	} else {
+		pr_debug("Command stream processed, wait for timer\n");
 		atomic_set(&priv->can_send_commands, 1);
+	}
 }
 
 int klgd_post_event(struct klgd_main *ctx, size_t idx, void *data)
@@ -208,11 +212,15 @@ void klgd_timer_fired(unsigned long ctx)
 	if (atomic_read(&priv->can_send_commands)) {
 		unsigned long flags;
 
+		pr_debug("Timer fired, can send commands now\n");
+
 		spin_lock_irqsave(&priv->stream_lock, flags);
 		klgd_build_command_stream(m);
 		spin_unlock_irqrestore(&priv->stream_lock, flags);
-	} else
+	} else {
+		pr_debug("Timer fired, last stream of commands is still being processed\n");
 		atomic_set(&priv->send_asap, 1);
+	}
 
 	klgd_schedule_update(ctx);
 }

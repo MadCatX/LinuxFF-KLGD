@@ -142,15 +142,18 @@ int klgd_init(struct klgd_main *ctx, void *dev_ctx, int (*callback)(void *, stru
 		return -EINVAL;
 
 	priv = kzalloc(sizeof(struct klgd_main_private), GFP_KERNEL);
-	if (!ctx->private)
+	if (!priv) {
+		printk(KERN_ERR "No memory for KLGD data\n");
 		return -ENOMEM;
+	}
 
 	mutex_init(&priv->stream_mlock);
 	priv->wq = create_singlethread_workqueue("klgd_processing_loop");
 	INIT_DELAYED_WORK(&priv->work, klgd_delayed_work);
 
 	priv->plugins = kzalloc(sizeof(struct klgd_plugin *) * plugin_count, GFP_KERNEL);
-	if (!ctx->private->plugins) {
+	if (!priv->plugins) {
+		printk(KERN_ERR "No memory for KLGD plugins\n");
 		ret = -ENOMEM;
 		goto err_out;
 	}
@@ -162,6 +165,7 @@ int klgd_init(struct klgd_main *ctx, void *dev_ctx, int (*callback)(void *, stru
 	priv->send_command_stream = callback;
 	priv->send_asap = 0;
 
+	ctx->private = priv;
 	return 0;
 
 err_out:

@@ -117,6 +117,9 @@ void klgd_deinit(struct klgd_main *ctx)
 	for (idx = 0; idx < priv->plugin_count; idx++) {
 		struct klgd_plugin *plugin = priv->plugins[idx];
 
+		if (!plugin)
+			continue;
+
 		plugin->deinit(plugin);
 		kfree(plugin);
 	}

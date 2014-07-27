@@ -103,19 +103,6 @@ static void klgd_delayed_work(struct work_struct *w)
 	mutex_unlock(&priv->stream_mlock);
 }
 
-static void klgd_free_stream(struct klgd_command_stream *s)
-{
-	size_t idx;
-
-	if (!s)
-		return;
-
-	for (idx = 0; idx < s->count; idx++) {
-		kfree(s->commands[idx]->bytes);
-		kfree(s->commands[idx]);
-	}
-}
-
 void klgd_deinit(struct klgd_main *ctx)
 {
 	struct klgd_main_private *priv = ctx->private;
@@ -124,7 +111,7 @@ void klgd_deinit(struct klgd_main *ctx)
 	cancel_delayed_work(&priv->work);
 	flush_workqueue(priv->wq);
 	destroy_workqueue(priv->wq);
-	printk(KERN_NOTICE "KLGD deinit, workqueue terminated\n");
+	pr_debug("Workqueue terminated\n");
 
 	for (idx = 0; idx < priv->plugin_count; idx++) {
 		struct klgd_plugin *plugin = priv->plugins[idx];
@@ -141,6 +128,19 @@ void klgd_deinit(struct klgd_main *ctx)
 	kfree(priv);
 }
 
+static void klgd_free_stream(struct klgd_command_stream *s)
+{
+	size_t idx;
+
+	if (!s)
+		return;
+
+	for (idx = 0; idx < s->count; idx++) {
+		kfree(s->commands[idx]->bytes);
+		kfree(s->commands[idx]);
+	}
+}
+
 int klgd_init(struct klgd_main *ctx, void *dev_ctx, enum klgd_send_status (*callback)(void *, struct klgd_command_stream *), const size_t plugin_count)
 {
 	struct klgd_main_private *priv = ctx->private;
@@ -155,7 +155,7 @@ int klgd_init(struct klgd_main *ctx, void *dev_ctx, enum klgd_send_status (*call
 
 	priv = kzalloc(sizeof(struct klgd_main_private), GFP_KERNEL);
 	if (!priv) {
-		printk(KERN_ERR "No memory for KLGD data\n");
+		printk(KERN_ERR "KLGD: No memory for KLGD data\n");
 		return -ENOMEM;
 	}
 
@@ -165,7 +165,7 @@ int klgd_init(struct klgd_main *ctx, void *dev_ctx, enum klgd_send_status (*call
 
 	priv->plugins = kzalloc(sizeof(struct klgd_plugin *) * plugin_count, GFP_KERNEL);
 	if (!priv->plugins) {
-		printk(KERN_ERR "No memory for KLGD plugins\n");
+		printk(KERN_ERR "KLGD: No memory for KLGD plugins\n");
 		ret = -ENOMEM;
 		goto err_out;
 	}

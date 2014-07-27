@@ -6,6 +6,10 @@
 #include <linux/workqueue.h>
 #include "klgd.h"
 
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR("Michal \"MadCatX\" Maly");
+MODULE_DESCRIPTION("Pluginable framework of helper functions to handle gaming devices");
+
 struct klgd_main_private {
 	struct delayed_work work;
 	bool can_send_commands;
@@ -18,10 +22,11 @@ struct klgd_main_private {
 	struct mutex stream_mlock;
 	struct workqueue_struct *wq;
 
-	int (*send_command_stream)(void *dev_ctx, struct klgd_command_stream *stream);
+	enum klgd_send_status (*send_command_stream)(void *dev_ctx, struct klgd_command_stream *stream);
 };
 
 static void klgd_free_stream(struct klgd_command_stream *s);
+static void klgd_notify_commands_sent_internal(struct klgd_main_private *priv);
 static void klgd_schedule_update(struct klgd_main *ctx);
 
 static bool klgd_append_stream(struct klgd_command_stream *target, struct klgd_command_stream *source)
@@ -47,14 +52,14 @@ static bool klgd_append_stream(struct klgd_command_stream *target, struct klgd_c
 /**
  * Called with stream_mlock held
  */
-static void klgd_build_command_stream(struct klgd_main_private *priv)
+static enum klgd_send_status klgd_build_command_stream(struct klgd_main_private *priv)
 {
 	const unsigned long now = jiffies;
 	size_t idx;
 
 	struct klgd_command_stream *s = kzalloc(sizeof(struct klgd_command_stream), GFP_KERNEL);
 	if (!s)
-		return; /* FIXME: Try to do an update later when some memory might be available */
+		return KLGD_SS_DONE; /* FIXME: Try to do an update later when some memory might be available */
 
 	for (idx = 0; idx < priv->plugin_count; idx++) {
  		struct klgd_plugin *plugin = priv->plugins[idx];
@@ -62,15 +67,16 @@ static void klgd_build_command_stream(struct klgd_main_private *priv)
 		/* FIXME: Same as above */
 		if (!klgd_append_stream(s, ss)) {
 			klgd_free_stream(s);
-			return;
+			return KLGD_SS_DONE;
 		}
 	}
 
 	if (s->count) {
 		priv->can_send_commands = false;
 		priv->last_stream = s;
-		priv->send_command_stream(priv->device_context, s);
+		return priv->send_command_stream(priv->device_context, s);
 	}
+	return KLGD_SS_DONE;
 }
 
 static void klgd_delayed_work(struct work_struct *w)
@@ -81,12 +87,17 @@ static void klgd_delayed_work(struct work_struct *w)
 
 	mutex_lock(&priv->stream_mlock);
 	if (priv->can_send_commands) {
+		int ret;
+
 		pr_debug("Timer fired, can send commands now\n");
-		klgd_build_command_stream(priv);
+		ret = klgd_build_command_stream(priv);
+		if (ret == KLGD_SS_DONE)
+			klgd_notify_commands_sent_internal(priv);
 	} else {
 		pr_debug("Timer fired, last stream of commands is still being processed\n");
 		priv->send_asap++;
 	}
+
 
 	klgd_schedule_update(m);
 	mutex_unlock(&priv->stream_mlock);
@@ -113,6 +124,7 @@ void klgd_deinit(struct klgd_main *ctx)
 	cancel_delayed_work(&priv->work);
 	flush_workqueue(priv->wq);
 	destroy_workqueue(priv->wq);
+	printk(KERN_NOTICE "KLGD deinit, workqueue terminated\n");
 
 	for (idx = 0; idx < priv->plugin_count; idx++) {
 		struct klgd_plugin *plugin = priv->plugins[idx];
@@ -120,16 +132,16 @@ void klgd_deinit(struct klgd_main *ctx)
 		if (!plugin)
 			continue;
 
-		plugin->deinit(plugin);
+		if (plugin->deinit)
+			plugin->deinit(plugin);
 		kfree(plugin);
 	}
 	kfree(priv->plugins);
 
 	kfree(priv);
-	kfree(ctx);
 }
 
-int klgd_init(struct klgd_main *ctx, void *dev_ctx, int (*callback)(void *, struct klgd_command_stream *), const size_t plugin_count)
+int klgd_init(struct klgd_main *ctx, void *dev_ctx, enum klgd_send_status (*callback)(void *, struct klgd_command_stream *), const size_t plugin_count)
 {
 	struct klgd_main_private *priv = ctx->private;
 	int ret;
@@ -180,6 +192,15 @@ void klgd_notify_commands_sent(struct klgd_main *ctx)
 	struct klgd_main_private *priv = ctx->private;
 
 	mutex_lock(&priv->stream_mlock);
+	klgd_notify_commands_sent_internal(priv);		
+	mutex_unlock(&priv->stream_mlock);
+}
+
+/**
+ * Called with stream_lock held
+ */
+static void klgd_notify_commands_sent_internal(struct klgd_main_private *priv)
+{
 	kfree(priv->last_stream);
 
 	if (priv->send_asap) {
@@ -190,7 +211,6 @@ void klgd_notify_commands_sent(struct klgd_main *ctx)
 		pr_debug("Command stream processed, wait for timer\n");
 		priv->can_send_commands = true;
 	}
-	mutex_unlock(&priv->stream_mlock);
 }
 
 int klgd_post_event(struct klgd_main *ctx, size_t idx, void *data)
@@ -225,6 +245,9 @@ int klgd_register_plugin(struct klgd_main *ctx, size_t idx, struct klgd_plugin *
 		return -ENOMEM;
 
 	priv->plugins[idx] = plugin;
+	if (plugin->init)
+	      plugin->init(plugin);
+
 	return 0;
 }
 

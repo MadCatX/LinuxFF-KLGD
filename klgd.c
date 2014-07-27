@@ -194,6 +194,9 @@ int klgd_post_event(struct klgd_main *ctx, size_t idx, void *data)
 	struct klgd_plugin *plugin = ctx->private->plugins[idx];
 	int ret;
 
+	if (!plugin || idx >= ctx->private->plugin_count)
+		return -EINVAL;
+
 	mutex_lock(&ctx->private->stream_mlock);
 	ret = plugin->post_event(plugin, data);
 	if (ret) {

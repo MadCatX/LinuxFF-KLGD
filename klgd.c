@@ -121,7 +121,6 @@ void klgd_deinit(struct klgd_main *ctx)
 
 		if (plugin->deinit)
 			plugin->deinit(plugin);
-		kfree(plugin);
 	}
 	kfree(priv->plugins);
 

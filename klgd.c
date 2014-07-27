@@ -21,10 +21,10 @@ struct klgd_main_private {
 	int (*send_command_stream)(void *dev_ctx, struct klgd_command_stream *stream);
 };
 
-void klgd_free_stream(struct klgd_command_stream *s);
-void klgd_schedule_update(struct klgd_main *ctx);
+static void klgd_free_stream(struct klgd_command_stream *s);
+static void klgd_schedule_update(struct klgd_main *ctx);
 
-bool klgd_append_stream(struct klgd_command_stream *target, struct klgd_command_stream *source)
+static bool klgd_append_stream(struct klgd_command_stream *target, struct klgd_command_stream *source)
 {
 	struct klgd_command **temp;
 	size_t idx;
@@ -47,7 +47,7 @@ bool klgd_append_stream(struct klgd_command_stream *target, struct klgd_command_
 /**
  * Called with stream_mlock held
  */
-void klgd_build_command_stream(struct klgd_main_private *priv)
+static void klgd_build_command_stream(struct klgd_main_private *priv)
 {
 	const unsigned long now = jiffies;
 	size_t idx;
@@ -73,7 +73,7 @@ void klgd_build_command_stream(struct klgd_main_private *priv)
 	}
 }
 
-void klgd_delayed_work(struct work_struct *w)
+static void klgd_delayed_work(struct work_struct *w)
 {
 	struct delayed_work *dw = container_of(w, struct delayed_work, work);
 	struct klgd_main_private *priv = container_of(dw, struct klgd_main_private, work);
@@ -92,7 +92,7 @@ void klgd_delayed_work(struct work_struct *w)
 	mutex_unlock(&priv->stream_mlock);
 }
 
-void klgd_free_stream(struct klgd_command_stream *s)
+static void klgd_free_stream(struct klgd_command_stream *s)
 {
 	size_t idx;
 
@@ -218,7 +218,7 @@ int klgd_register_plugin(struct klgd_main *ctx, size_t idx, struct klgd_plugin *
 	return 0;
 }
 
-void klgd_schedule_update(struct klgd_main *ctx)
+static void klgd_schedule_update(struct klgd_main *ctx)
 {
 	struct klgd_main_private *priv = ctx->private;
 	const unsigned long now = jiffies;
@@ -249,3 +249,9 @@ void klgd_schedule_update(struct klgd_main *ctx)
 		queue_delayed_work(priv->wq, &priv->work, earliest - now);
 	}
 }
+
+EXPORT_SYMBOL_GPL(klgd_deinit);
+EXPORT_SYMBOL_GPL(klgd_init);
+EXPORT_SYMBOL_GPL(klgd_notify_commands_sent);
+EXPORT_SYMBOL_GPL(klgd_post_event);
+EXPORT_SYMBOL_GPL(klgd_register_plugin);

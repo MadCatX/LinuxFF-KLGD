@@ -33,8 +33,3 @@ void klgd_notify_commands_sent(struct klgd_main *ctx);
 int klgd_post_event(struct klgd_main *ctx, const size_t idx, void *data);
 int klgd_register_plugin(struct klgd_main *ctx, const size_t idx, struct klgd_plugin *plugin);
 
-EXPORT_SYMBOL_GPL(klgd_deinit);
-EXPORT_SYMBOL_GPL(klgd_init);
-EXPORT_SYMBOL_GPL(klgd_notify_commands_sent);
-EXPORT_SYMBOL_GPL(klgd_post_event);
-EXPORT_SYMBOL_GPL(klgd_register_plugin);

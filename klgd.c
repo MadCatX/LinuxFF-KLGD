@@ -10,6 +10,8 @@ MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Michal \"MadCatX\" Maly");
 MODULE_DESCRIPTION("Pluginable framework of helper functions to handle gaming devices");
 
+#define TRYAGAIN_DELAY 5
+
 struct klgd_main_private {
 	struct delayed_work work;
 	bool can_send_commands;
@@ -19,21 +21,67 @@ struct klgd_main_private {
 	size_t plugin_count;
 	struct klgd_plugin **plugins;
 	unsigned int send_asap;
-	struct mutex stream_mlock;
+	struct mutex plugins_lock;
 	struct workqueue_struct *wq;
 
-	enum klgd_send_status (*send_command_stream)(void *dev_ctx, struct klgd_command_stream *stream);
+	enum klgd_send_status (*send_command_stream)(void *dev_ctx, const struct klgd_command_stream *stream);
 };
 
 static void klgd_free_stream(struct klgd_command_stream *s);
 static void klgd_notify_commands_sent_internal(struct klgd_main_private *priv);
-static void klgd_schedule_update(struct klgd_main *ctx);
+static void klgd_schedule_update(struct klgd_main_private *priv);
 
-static bool klgd_append_stream(struct klgd_command_stream *target, struct klgd_command_stream *source)
+struct klgd_command * klgd_alloc_cmd(const size_t length)
 {
-	struct klgd_command **temp;
+	struct klgd_command *cmd = kzalloc(sizeof(struct klgd_command) * length, GFP_KERNEL);
+	if (!cmd)
+		return NULL;
+	cmd->length = length;
+	return cmd;
+}
+EXPORT_SYMBOL_GPL(klgd_alloc_cmd);
+
+struct klgd_command_stream * klgd_alloc_stream(void)
+{
+	return kzalloc(sizeof(struct klgd_command_stream), GFP_KERNEL);
+}
+EXPORT_SYMBOL_GPL(klgd_alloc_stream);	
+
+bool klgd_append_cmd(struct klgd_command_stream *target, const struct klgd_command *cmd)
+{
+	const struct klgd_command **temp;
+
+	if (!target) {
+		printk(KERN_NOTICE "Cannot append to NULL stream\n");
+		return false;
+	}
+	if (!cmd) {
+		printk(KERN_NOTICE "Cannot append NULL cmd\n");
+		return false;
+	}
+
+	temp = krealloc(target->commands, sizeof(struct klgd_command *) * (target->count + 1), GFP_KERNEL);
+	if (!temp)
+		return false;
+
+	target->commands = temp;
+	target->commands[target->count] = cmd;
+	target->count++;
+
+	return true;
+}
+EXPORT_SYMBOL_GPL(klgd_append_cmd);
+
+
+static bool klgd_append_stream(struct klgd_command_stream *target, const struct klgd_command_stream *source)
+{
+	const struct klgd_command **temp;
 	size_t idx;
 
+	/* We got NULL command, skip it */
+	if (!source)
+		return true;
+	/* We got command of zero length, skip it */
 	if (!source->count)
 		return true;
 
@@ -50,7 +98,7 @@ static bool klgd_append_stream(struct klgd_command_stream *target, struct klgd_c
 }
 
 /**
- * Called with stream_mlock held
+ * Called with plugins_lock held
  */
 static enum klgd_send_status klgd_build_command_stream(struct klgd_main_private *priv)
 {
@@ -59,23 +107,24 @@ static enum klgd_send_status klgd_build_command_stream(struct klgd_main_private 
 
 	struct klgd_command_stream *s = kzalloc(sizeof(struct klgd_command_stream), GFP_KERNEL);
 	if (!s)
-		return KLGD_SS_DONE; /* FIXME: Try to do an update later when some memory might be available */
+		return KLGD_SS_TRYAGAIN;
 
 	for (idx = 0; idx < priv->plugin_count; idx++) {
  		struct klgd_plugin *plugin = priv->plugins[idx];
 		struct klgd_command_stream *ss = plugin->get_commands(plugin, now);
-		/* FIXME: Same as above */
 		if (!klgd_append_stream(s, ss)) {
 			klgd_free_stream(s);
-			return KLGD_SS_DONE;
+			return KLGD_SS_TRYAGAIN;
 		}
 	}
 
 	if (s->count) {
 		priv->can_send_commands = false;
 		priv->last_stream = s;
+		printk(KERN_NOTICE "KLGD: Sending command stream\n");
 		return priv->send_command_stream(priv->device_context, s);
 	}
+	printk(KERN_NOTICE "KLGD: Command stream is empty\n");
 	return KLGD_SS_DONE;
 }
 
@@ -83,48 +132,38 @@ static void klgd_delayed_work(struct work_struct *w)
 {
 	struct delayed_work *dw = container_of(w, struct delayed_work, work);
 	struct klgd_main_private *priv = container_of(dw, struct klgd_main_private, work);
-	struct klgd_main *m = container_of(&priv, struct klgd_main, private);
 
-	mutex_lock(&priv->stream_mlock);
+	mutex_lock(&priv->plugins_lock);
+	printk(KERN_NOTICE "KLGD/WQ: Plugins state locked\n");
 	if (priv->can_send_commands) {
 		int ret;
 
-		pr_debug("Timer fired, can send commands now\n");
+		printk(KERN_NOTICE "KLGD/WQ: Timer fired, can send commands now\n");
 		ret = klgd_build_command_stream(priv);
-		if (ret == KLGD_SS_DONE)
+		switch (ret) {
+		case KLGD_SS_DONE:
 			klgd_notify_commands_sent_internal(priv);
+			break;
+		case KLGD_SS_TRYAGAIN:
+			queue_delayed_work(priv->wq, &priv->work, TRYAGAIN_DELAY);
+			printk(KERN_NOTICE "KLGD/WQ: Plugins state unlocked\n");
+			mutex_unlock(&priv->plugins_lock);
+			return;
+		case KLGD_SS_RUNNING:
+			printk(KERN_NOTICE "KLGD/WQ: Sending command stream - async\n");
+			break;
+		default:
+			/* TODO: Error handling */
+			break;
+		}
 	} else {
-		pr_debug("Timer fired, last stream of commands is still being processed\n");
+		printk(KERN_NOTICE "KLGD/WQ: Timer fired, last stream of commands is still being processed\n");
 		priv->send_asap++;
 	}
 
-
-	klgd_schedule_update(m);
-	mutex_unlock(&priv->stream_mlock);
-}
-
-void klgd_deinit(struct klgd_main *ctx)
-{
-	struct klgd_main_private *priv = ctx->private;
-	size_t idx;
-
-	cancel_delayed_work(&priv->work);
-	flush_workqueue(priv->wq);
-	destroy_workqueue(priv->wq);
-	pr_debug("Workqueue terminated\n");
-
-	for (idx = 0; idx < priv->plugin_count; idx++) {
-		struct klgd_plugin *plugin = priv->plugins[idx];
-
-		if (!plugin)
-			continue;
-
-		if (plugin->deinit)
-			plugin->deinit(plugin);
-	}
-	kfree(priv->plugins);
-
-	kfree(priv);
+	klgd_schedule_update(priv);
+	printk(KERN_NOTICE "KLGD/WQ: Plugins state unlocked\n");
+	mutex_unlock(&priv->plugins_lock);
 }
 
 static void klgd_free_stream(struct klgd_command_stream *s)
@@ -140,7 +179,33 @@ static void klgd_free_stream(struct klgd_command_stream *s)
 	}
 }
 
-int klgd_init(struct klgd_main *ctx, void *dev_ctx, enum klgd_send_status (*callback)(void *, struct klgd_command_stream *), const size_t plugin_count)
+void klgd_deinit(struct klgd_main *ctx)
+{
+	struct klgd_main_private *priv = ctx->private;
+	size_t idx;
+
+	cancel_delayed_work(&priv->work);
+	flush_workqueue(priv->wq);
+	destroy_workqueue(priv->wq);
+	printk(KERN_NOTICE "KLGD deinit, workqueue terminated\n");
+
+	for (idx = 0; idx < priv->plugin_count; idx++) {
+		struct klgd_plugin *plugin = priv->plugins[idx];
+
+		if (!plugin)
+			continue;
+
+		if (plugin->deinit)
+			plugin->deinit(plugin);
+		kfree(plugin);
+	}
+	kfree(priv->plugins);
+
+	kfree(priv);
+}
+EXPORT_SYMBOL_GPL(klgd_deinit);
+
+int klgd_init(struct klgd_main *ctx, void *dev_ctx, enum klgd_send_status (*callback)(void *, const struct klgd_command_stream *), const size_t plugin_count)
 {
 	struct klgd_main_private *priv = ctx->private;
 	int ret;
@@ -154,17 +219,17 @@ int klgd_init(struct klgd_main *ctx, void *dev_ctx, enum klgd_send_status (*call
 
 	priv = kzalloc(sizeof(struct klgd_main_private), GFP_KERNEL);
 	if (!priv) {
-		printk(KERN_ERR "KLGD: No memory for KLGD data\n");
+		printk(KERN_ERR "No memory for KLGD data\n");
 		return -ENOMEM;
 	}
 
-	mutex_init(&priv->stream_mlock);
+	mutex_init(&priv->plugins_lock);
 	priv->wq = create_singlethread_workqueue("klgd_processing_loop");
 	INIT_DELAYED_WORK(&priv->work, klgd_delayed_work);
 
 	priv->plugins = kzalloc(sizeof(struct klgd_plugin *) * plugin_count, GFP_KERNEL);
 	if (!priv->plugins) {
-		printk(KERN_ERR "KLGD: No memory for KLGD plugins\n");
+		printk(KERN_ERR "No memory for KLGD plugins\n");
 		ret = -ENOMEM;
 		goto err_out;
 	}
@@ -185,15 +250,24 @@ err_out:
 
 	return ret;
 }
+EXPORT_SYMBOL_GPL(klgd_init);
+
+void klgd_lock_plugins(struct mutex *lock)
+{
+	mutex_lock(lock);
+	printk(KERN_DEBUG "KLGD: Plugins state locked\n");
+}
+EXPORT_SYMBOL_GPL(klgd_lock_plugins);
 
 void klgd_notify_commands_sent(struct klgd_main *ctx)
 {
 	struct klgd_main_private *priv = ctx->private;
 
-	mutex_lock(&priv->stream_mlock);
+	mutex_lock(&priv->plugins_lock);
 	klgd_notify_commands_sent_internal(priv);		
-	mutex_unlock(&priv->stream_mlock);
+	mutex_unlock(&priv->plugins_lock);
 }
+EXPORT_SYMBOL_GPL(klgd_notify_commands_sent);
 
 /**
  * Called with stream_lock held
@@ -212,26 +286,6 @@ static void klgd_notify_commands_sent_internal(struct klgd_main_private *priv)
 	}
 }
 
-int klgd_post_event(struct klgd_main *ctx, size_t idx, void *data)
-{
-	struct klgd_plugin *plugin = ctx->private->plugins[idx];
-	int ret;
-
-	if (!plugin || idx >= ctx->private->plugin_count)
-		return -EINVAL;
-
-	mutex_lock(&ctx->private->stream_mlock);
-	ret = plugin->post_event(plugin, data);
-	if (ret) {
-		mutex_unlock(&ctx->private->stream_mlock);
-		return ret;
-	}
-
-	klgd_schedule_update(ctx);
-	mutex_unlock(&ctx->private->stream_mlock);
-	return 0;
-}
-
 int klgd_register_plugin(struct klgd_main *ctx, size_t idx, struct klgd_plugin *plugin)
 {
 	struct klgd_main_private *priv = ctx->private;
@@ -239,20 +293,27 @@ int klgd_register_plugin(struct klgd_main *ctx, size_t idx, struct klgd_plugin *
 	if (priv->plugins[idx])
 		return -EINVAL;
 
-	priv->plugins[idx] = kzalloc(sizeof(struct klgd_plugin), GFP_KERNEL);
-	if (!priv->plugins[idx])
-		return -ENOMEM;
-
+	plugin->plugins_lock = &priv->plugins_lock;
 	priv->plugins[idx] = plugin;
 	if (plugin->init)
-	      plugin->init(plugin);
+	      return plugin->init(plugin);
 
 	return 0;
 }
+EXPORT_SYMBOL_GPL(klgd_register_plugin);
 
-static void klgd_schedule_update(struct klgd_main *ctx)
+void klgd_unlock_plugins_sched(struct mutex *lock)
 {
-	struct klgd_main_private *priv = ctx->private;
+	struct klgd_main_private *priv = container_of(lock, struct klgd_main_private, plugins_lock);
+
+	klgd_schedule_update(priv);
+	mutex_unlock(lock);
+	printk(KERN_DEBUG "KLGD: Plugins state unlocked\n");
+}
+EXPORT_SYMBOL_GPL(klgd_unlock_plugins_sched);
+
+static void klgd_schedule_update(struct klgd_main_private *priv)
+{
 	const unsigned long now = jiffies;
 	unsigned int events = 0;
 	unsigned long earliest;
@@ -265,25 +326,17 @@ static void klgd_schedule_update(struct klgd_main *ctx)
 		if (plugin->get_update_time(plugin, now, &t)) {
 			if (!events)
 				earliest = t;
-			else {
-				if (time_before(t, earliest))
-					earliest = t;
-			}
+			else if (time_before(t, earliest))
+				earliest = t;
 			events++;
 		}
 	}
 
 	if (!events) {
-		pr_debug("No events, deactivating timer\n");
+		printk(KERN_NOTICE "No events, deactivating timer\n");
 		cancel_delayed_work(&priv->work);
 	} else {
-		pr_debug("Events: %u, earliest: %lu, now: %lu\n", events, earliest, now);
+		printk(KERN_NOTICE "Events: %u, earliest: %lu, now: %lu\n", events, earliest, now);
 		queue_delayed_work(priv->wq, &priv->work, earliest - now);
 	}
 }
-
-EXPORT_SYMBOL_GPL(klgd_deinit);
-EXPORT_SYMBOL_GPL(klgd_init);
-EXPORT_SYMBOL_GPL(klgd_notify_commands_sent);
-EXPORT_SYMBOL_GPL(klgd_post_event);
-EXPORT_SYMBOL_GPL(klgd_register_plugin);

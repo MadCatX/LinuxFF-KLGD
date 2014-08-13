@@ -37,4 +37,5 @@ int klgd_init(struct klgd_main *ctx, void *dev_ctx, enum klgd_send_status (*call
 void klgd_lock_plugins(struct mutex *lock);
 void klgd_notify_commands_sent(struct klgd_main *ctx);
 int klgd_register_plugin(struct klgd_main *ctx, const size_t idx, struct klgd_plugin *plugin);
+void klgd_unlock_plugins(struct mutex *lock);
 void klgd_unlock_plugins_sched(struct mutex *lock);

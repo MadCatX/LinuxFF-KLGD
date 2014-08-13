@@ -302,13 +302,21 @@ int klgd_register_plugin(struct klgd_main *ctx, size_t idx, struct klgd_plugin *
 }
 EXPORT_SYMBOL_GPL(klgd_register_plugin);
 
+void klgd_unlock_plugins(struct mutex *lock)
+{
+	mutex_unlock(lock);
+	printk(KERN_DEBUG "KLGD: Plugins state unlocked, NOT scheduled\n");
+}
+EXPORT_SYMBOL_GPL(klgd_unlock_plugins);
+
+
 void klgd_unlock_plugins_sched(struct mutex *lock)
 {
 	struct klgd_main_private *priv = container_of(lock, struct klgd_main_private, plugins_lock);
 
 	klgd_schedule_update(priv);
 	mutex_unlock(lock);
-	printk(KERN_DEBUG "KLGD: Plugins state unlocked\n");
+	printk(KERN_DEBUG "KLGD: Plugins state unlocked, rescheduled\n");
 }
 EXPORT_SYMBOL_GPL(klgd_unlock_plugins_sched);
 

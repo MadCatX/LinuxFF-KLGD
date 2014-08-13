@@ -14,21 +14,19 @@ MODULE_DESCRIPTION("Pluginable framework of helper functions to handle gaming de
 
 struct klgd_main_private {
 	struct delayed_work work;
-	bool can_send_commands;
 	void *device_context;
 	unsigned long earliest_update;
 	struct klgd_command_stream *last_stream;
 	size_t plugin_count;
 	struct klgd_plugin **plugins;
-	unsigned int send_asap;
 	struct mutex plugins_lock;
+	struct mutex send_lock;
 	struct workqueue_struct *wq;
 
-	enum klgd_send_status (*send_command_stream)(void *dev_ctx, const struct klgd_command_stream *stream);
+	int (*send_command_stream)(void *dev_ctx, const struct klgd_command_stream *stream);
 };
 
 static void klgd_free_stream(struct klgd_command_stream *s);
-static void klgd_notify_commands_sent_internal(struct klgd_main_private *priv);
 static void klgd_schedule_update(struct klgd_main_private *priv);
 
 struct klgd_command * klgd_alloc_cmd(const size_t length)
@@ -100,67 +98,80 @@ static bool klgd_append_stream(struct klgd_command_stream *target, const struct 
 /**
  * Called with plugins_lock held
  */
-static enum klgd_send_status klgd_build_command_stream(struct klgd_main_private *priv)
+int klgd_build_command_stream(struct klgd_main_private *priv, struct klgd_command_stream **s)
 {
 	const unsigned long now = jiffies;
 	size_t idx;
 
-	struct klgd_command_stream *s = kzalloc(sizeof(struct klgd_command_stream), GFP_KERNEL);
+	*s = kzalloc(sizeof(struct klgd_command_stream), GFP_KERNEL);
 	if (!s)
-		return KLGD_SS_TRYAGAIN;
+		return -EAGAIN;
 
 	for (idx = 0; idx < priv->plugin_count; idx++) {
  		struct klgd_plugin *plugin = priv->plugins[idx];
 		struct klgd_command_stream *ss = plugin->get_commands(plugin, now);
-		if (!klgd_append_stream(s, ss)) {
-			klgd_free_stream(s);
-			return KLGD_SS_TRYAGAIN;
+		if (!klgd_append_stream(*s, ss)) {
+			klgd_free_stream(*s);
+			return -EAGAIN;
 		}
 	}
 
-	if (s->count) {
-		priv->can_send_commands = false;
-		priv->last_stream = s;
-		printk(KERN_NOTICE "KLGD: Sending command stream\n");
-		return priv->send_command_stream(priv->device_context, s);
+	if ((*s)->count) {
+		priv->last_stream = *s;
+		printk(KERN_NOTICE "KLGD: Command stream built\n");
+		return 0;
 	}
 	printk(KERN_NOTICE "KLGD: Command stream is empty\n");
-	return KLGD_SS_DONE;
+	return -ENOENT;
 }
 
 static void klgd_delayed_work(struct work_struct *w)
 {
 	struct delayed_work *dw = container_of(w, struct delayed_work, work);
 	struct klgd_main_private *priv = container_of(dw, struct klgd_main_private, work);
+	struct klgd_command_stream *s;
+	unsigned long now;
+	int ret;
+
+	mutex_lock(&priv->send_lock);
+
+	printk(KERN_NOTICE "KLGD/WQ: Timer fired and send_lock acquired\n");
 
 	mutex_lock(&priv->plugins_lock);
 	printk(KERN_NOTICE "KLGD/WQ: Plugins state locked\n");
-	if (priv->can_send_commands) {
-		int ret;
+	ret = klgd_build_command_stream(priv, &s);
+	mutex_unlock(&priv->plugins_lock);
 
-		printk(KERN_NOTICE "KLGD/WQ: Timer fired, can send commands now\n");
-		ret = klgd_build_command_stream(priv);
-		switch (ret) {
-		case KLGD_SS_DONE:
-			klgd_notify_commands_sent_internal(priv);
-			break;
-		case KLGD_SS_TRYAGAIN:
-			queue_delayed_work(priv->wq, &priv->work, TRYAGAIN_DELAY);
-			printk(KERN_NOTICE "KLGD/WQ: Plugins state unlocked\n");
-			mutex_unlock(&priv->plugins_lock);
-			return;
-		case KLGD_SS_RUNNING:
-			printk(KERN_NOTICE "KLGD/WQ: Sending command stream - async\n");
-			break;
-		default:
-			/* TODO: Error handling */
-			break;
-		}
-	} else {
-		printk(KERN_NOTICE "KLGD/WQ: Timer fired, last stream of commands is still being processed\n");
-		priv->send_asap++;
+	switch (ret) {
+	case -EAGAIN:
+		/* Unable to build command stream right now, try again */
+		mutex_unlock(&priv->send_lock);
+		queue_delayed_work(priv->wq, &priv->work, TRYAGAIN_DELAY);
+		return;
+	case -ENOENT:
+		/* Empty command stream. Plugins have no work for us, exit */
+		goto out;
+		return;
+	case 0:
+		break;
+	default:
+		/* TODO: Handle unspecified error */
+		break;
 	}
 
+	now = jiffies;	
+	ret = priv->send_command_stream(priv->device_context, s);
+	if (ret) {
+		/* TODO: Error handling */
+		printk(KERN_NOTICE "KLGD/WQ: Unable to send command stream, ret code %d\n", ret);
+	} else
+		printk(KERN_NOTICE "KLGD/WQ: Commands sent, time elapsed %u [msec]\n", jiffies_to_msecs(jiffies - now));
+
+out:
+	mutex_unlock(&priv->send_lock);
+
+	/* We're done submitting, check if there is some work for us in the future */
+	mutex_lock(&priv->plugins_lock);
 	klgd_schedule_update(priv);
 	printk(KERN_NOTICE "KLGD/WQ: Plugins state unlocked\n");
 	mutex_unlock(&priv->plugins_lock);
@@ -205,7 +216,7 @@ void klgd_deinit(struct klgd_main *ctx)
 }
 EXPORT_SYMBOL_GPL(klgd_deinit);
 
-int klgd_init(struct klgd_main *ctx, void *dev_ctx, enum klgd_send_status (*callback)(void *, const struct klgd_command_stream *), const size_t plugin_count)
+int klgd_init(struct klgd_main *ctx, void *dev_ctx, int (*callback)(void *, const struct klgd_command_stream *), const size_t plugin_count)
 {
 	struct klgd_main_private *priv = ctx->private;
 	int ret;
@@ -224,6 +235,7 @@ int klgd_init(struct klgd_main *ctx, void *dev_ctx, enum klgd_send_status (*call
 	}
 
 	mutex_init(&priv->plugins_lock);
+	mutex_init(&priv->send_lock);
 	priv->wq = create_singlethread_workqueue("klgd_processing_loop");
 	INIT_DELAYED_WORK(&priv->work, klgd_delayed_work);
 
@@ -235,11 +247,9 @@ int klgd_init(struct klgd_main *ctx, void *dev_ctx, enum klgd_send_status (*call
 	}
 	priv->plugin_count = plugin_count;
 
-	priv->can_send_commands = true;
 	priv->device_context = dev_ctx;
 	priv->last_stream = NULL;
 	priv->send_command_stream = callback;
-	priv->send_asap = 0;
 
 	ctx->private = priv;
 	return 0;
@@ -258,33 +268,6 @@ void klgd_lock_plugins(struct mutex *lock)
 	printk(KERN_DEBUG "KLGD: Plugins state locked\n");
 }
 EXPORT_SYMBOL_GPL(klgd_lock_plugins);
-
-void klgd_notify_commands_sent(struct klgd_main *ctx)
-{
-	struct klgd_main_private *priv = ctx->private;
-
-	mutex_lock(&priv->plugins_lock);
-	klgd_notify_commands_sent_internal(priv);		
-	mutex_unlock(&priv->plugins_lock);
-}
-EXPORT_SYMBOL_GPL(klgd_notify_commands_sent);
-
-/**
- * Called with stream_lock held
- */
-static void klgd_notify_commands_sent_internal(struct klgd_main_private *priv)
-{
-	kfree(priv->last_stream);
-
-	if (priv->send_asap) {
-		pr_debug("Command stream processed, send a new one immediately\n");
-		klgd_build_command_stream(priv);
-		priv->send_asap--;
-	} else {
-		pr_debug("Command stream processed, wait for timer\n");
-		priv->can_send_commands = true;
-	}
-}
 
 int klgd_register_plugin(struct klgd_main *ctx, size_t idx, struct klgd_plugin *plugin)
 {

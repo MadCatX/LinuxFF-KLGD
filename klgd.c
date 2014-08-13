@@ -166,6 +166,7 @@ static void klgd_delayed_work(struct work_struct *w)
 		printk(KERN_NOTICE "KLGD/WQ: Unable to send command stream, ret code %d\n", ret);
 	} else
 		printk(KERN_NOTICE "KLGD/WQ: Commands sent, time elapsed %u [msec]\n", jiffies_to_msecs(jiffies - now));
+	kfree(s);
 
 out:
 	mutex_unlock(&priv->send_lock);

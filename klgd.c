@@ -31,9 +31,18 @@ static void klgd_schedule_update(struct klgd_main_private *priv);
 
 struct klgd_command * klgd_alloc_cmd(const size_t length)
 {
-	struct klgd_command *cmd = kzalloc(sizeof(struct klgd_command) * length, GFP_KERNEL);
+	struct klgd_command *cmd = kzalloc(sizeof(struct klgd_command), GFP_KERNEL);
+	char *bytes;
 	if (!cmd)
 		return NULL;
+
+	/* Cast away the const-ness */
+	bytes = kzalloc(sizeof(char) * length, GFP_KERNEL);
+	if (!bytes) {
+		kfree(cmd);
+		return NULL;
+	}
+	*(char **)(&cmd->bytes) = bytes;
 	cmd->length = length;
 	return cmd;
 }
@@ -178,6 +187,14 @@ out:
 	mutex_unlock(&priv->plugins_lock);
 }
 
+static void klgd_free_command(const struct klgd_command *cmd)
+{
+	if (cmd) {
+		kfree(cmd->bytes);
+		kfree(cmd);
+	}
+}
+
 static void klgd_free_stream(struct klgd_command_stream *s)
 {
 	size_t idx;
@@ -185,10 +202,8 @@ static void klgd_free_stream(struct klgd_command_stream *s)
 	if (!s)
 		return;
 
-	for (idx = 0; idx < s->count; idx++) {
-		kfree(s->commands[idx]->bytes);
-		kfree(s->commands[idx]);
-	}
+	for (idx = 0; idx < s->count; idx++)
+		klgd_free_command(s->commands[idx]);
 }
 
 void klgd_deinit(struct klgd_main *ctx)

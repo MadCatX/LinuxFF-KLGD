@@ -1,6 +1,6 @@
 
 struct klgd_command {
-	char *bytes;
+	char * const bytes;
 	size_t length;
 };
 

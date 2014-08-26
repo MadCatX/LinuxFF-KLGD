@@ -284,6 +284,18 @@ void klgd_lock_plugins(struct mutex *lock)
 }
 EXPORT_SYMBOL_GPL(klgd_lock_plugins);
 
+struct klgd_command * klgd_make_command(const char * const bytes, const size_t length)
+{
+	struct klgd_command *cmd = kzalloc(sizeof(struct klgd_command), GFP_KERNEL);
+	if (!cmd)
+		return NULL;
+
+	*(char **)(&cmd->bytes) = bytes;
+	cmd->length = length;
+
+	return cmd;
+}
+
 int klgd_register_plugin(struct klgd_main *ctx, size_t idx, struct klgd_plugin *plugin)
 {
 	struct klgd_main_private *priv = ctx->private;

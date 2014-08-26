@@ -29,6 +29,7 @@ bool klgd_append_cmd(struct klgd_command_stream *target, const struct klgd_comma
 void klgd_deinit(struct klgd_main *ctx);
 int klgd_init(struct klgd_main *ctx, void *dev_ctx, int (*callback)(void *, const struct klgd_command_stream *), const unsigned long plugin_count);
 void klgd_lock_plugins(struct mutex *lock);
+struct klgd_command * klgd_make_cmd(const char * const bytes);
 int klgd_register_plugin(struct klgd_main *ctx, const size_t idx, struct klgd_plugin *plugin);
 void klgd_unlock_plugins(struct mutex *lock);
 void klgd_unlock_plugins_sched(struct mutex *lock);

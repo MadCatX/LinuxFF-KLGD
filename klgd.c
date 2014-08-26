@@ -290,7 +290,7 @@ struct klgd_command * klgd_make_command(const char * const bytes, const size_t l
 	if (!cmd)
 		return NULL;
 
-	*(char **)(&cmd->bytes) = bytes;
+	*(const char **)(&cmd->bytes) = bytes;
 	cmd->length = length;
 
 	return cmd;

@@ -32,17 +32,16 @@ static void klgd_schedule_update(struct klgd_main_private *priv);
 struct klgd_command * klgd_alloc_cmd(const size_t length)
 {
 	struct klgd_command *cmd = kzalloc(sizeof(struct klgd_command), GFP_KERNEL);
-	char *bytes;
 	if (!cmd)
 		return NULL;
 
 	/* Cast away the const-ness */
-	bytes = kzalloc(sizeof(char) * length, GFP_KERNEL);
-	if (!bytes) {
+	*(char **)(&cmd->bytes) = kzalloc(sizeof(char) * length, GFP_KERNEL);
+	if (!cmd->bytes) {
 		kfree(cmd);
 		return NULL;
 	}
-	*(char **)(&cmd->bytes) = bytes;
+
 	cmd->length = length;
 	return cmd;
 }

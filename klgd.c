@@ -295,6 +295,7 @@ struct klgd_command * klgd_make_command(const char * const bytes, const size_t l
 
 	return cmd;
 }
+EXPORT_SYMBOL_GPL(klgd_make_command);
 
 int klgd_register_plugin(struct klgd_main *ctx, size_t idx, struct klgd_plugin *plugin)
 {

@@ -210,6 +210,12 @@ void klgd_deinit(struct klgd_main *ctx)
 	struct klgd_main_private *priv = ctx->private;
 	size_t idx;
 
+	if (!ctx)
+		return;
+	if (!ctx->private)
+		return;
+	priv = ctx->private;
+
 	cancel_delayed_work(&priv->work);
 	flush_workqueue(priv->wq);
 	destroy_workqueue(priv->wq);

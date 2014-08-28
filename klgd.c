@@ -19,6 +19,7 @@ struct klgd_main_private {
 	struct klgd_command_stream *last_stream;
 	size_t plugin_count;
 	struct klgd_plugin **plugins;
+	bool *dontfree;
 	struct mutex plugins_lock;
 	struct mutex send_lock;
 	struct workqueue_struct *wq;
@@ -226,12 +227,15 @@ void klgd_deinit(struct klgd_main *ctx)
 
 		if (!plugin)
 			continue;
+		if (priv->dontfree[idx])
+			continue;
 
 		if (plugin->deinit)
 			plugin->deinit(plugin);
 		kfree(plugin);
 	}
 	kfree(priv->plugins);
+	kfree(priv->dontfree);
 
 	kfree(priv);
 }
@@ -266,6 +270,12 @@ int klgd_init(struct klgd_main *ctx, void *dev_ctx, int (*callback)(void *, cons
 		ret = -ENOMEM;
 		goto err_out;
 	}
+	priv->dontfree = kzalloc(sizeof(bool) * plugin_count, GFP_KERNEL);
+	if (!priv->dontfree) {
+		printk(KERN_ERR "No memory for plugin quirks\n");
+		ret = -ENOMEM;
+		goto err_out2;
+	}
 	priv->plugin_count = plugin_count;
 
 	priv->device_context = dev_ctx;
@@ -275,6 +285,8 @@ int klgd_init(struct klgd_main *ctx, void *dev_ctx, int (*callback)(void *, cons
 	ctx->private = priv;
 	return 0;
 
+err_out2:
+	kfree(priv->plugins);
 err_out:
 	destroy_workqueue(priv->wq);
 	kfree(ctx->private);
@@ -303,7 +315,7 @@ struct klgd_command * klgd_make_command(const char * const bytes, const size_t l
 }
 EXPORT_SYMBOL_GPL(klgd_make_command);
 
-int klgd_register_plugin(struct klgd_main *ctx, size_t idx, struct klgd_plugin *plugin)
+int klgd_register_plugin(struct klgd_main *ctx, size_t idx, struct klgd_plugin *plugin, bool dontfree)
 {
 	struct klgd_main_private *priv = ctx->private;
 
@@ -312,6 +324,7 @@ int klgd_register_plugin(struct klgd_main *ctx, size_t idx, struct klgd_plugin *
 
 	plugin->plugins_lock = &priv->plugins_lock;
 	priv->plugins[idx] = plugin;
+	priv->dontfree[idx] = dontfree;
 	if (plugin->init)
 	      return plugin->init(plugin);
 

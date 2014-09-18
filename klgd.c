@@ -27,7 +27,6 @@ struct klgd_main_private {
 	int (*send_command_stream)(void *dev_ctx, const struct klgd_command_stream *stream);
 };
 
-static void klgd_free_stream(struct klgd_command_stream *s);
 static void klgd_schedule_update(struct klgd_main_private *priv);
 
 struct klgd_command * klgd_alloc_cmd(const size_t length)
@@ -80,7 +79,7 @@ bool klgd_append_cmd(struct klgd_command_stream *target, const struct klgd_comma
 EXPORT_SYMBOL_GPL(klgd_append_cmd);
 
 
-static bool klgd_append_stream(struct klgd_command_stream *target, const struct klgd_command_stream *source)
+bool klgd_append_stream(struct klgd_command_stream *target, const struct klgd_command_stream *source)
 {
 	const struct klgd_command **temp;
 	size_t idx;
@@ -103,6 +102,7 @@ static bool klgd_append_stream(struct klgd_command_stream *target, const struct 
 
 	return true;
 }
+EXPORT_SYMBOL_GPL(klgd_append_stream);
 
 /**
  * Called with plugins_lock held
@@ -195,7 +195,7 @@ static void klgd_free_command(const struct klgd_command *cmd)
 	}
 }
 
-static void klgd_free_stream(struct klgd_command_stream *s)
+void klgd_free_stream(struct klgd_command_stream *s)
 {
 	size_t idx;
 
@@ -205,6 +205,7 @@ static void klgd_free_stream(struct klgd_command_stream *s)
 	for (idx = 0; idx < s->count; idx++)
 		klgd_free_command(s->commands[idx]);
 }
+EXPORT_SYMBOL_GPL(klgd_free_stream);
 
 void klgd_deinit(struct klgd_main *ctx)
 {

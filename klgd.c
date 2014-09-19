@@ -53,54 +53,54 @@ struct klgd_command_stream * klgd_alloc_stream(void)
 }
 EXPORT_SYMBOL_GPL(klgd_alloc_stream);	
 
-bool klgd_append_cmd(struct klgd_command_stream *target, const struct klgd_command *cmd)
+int klgd_append_cmd(struct klgd_command_stream *target, const struct klgd_command *cmd)
 {
 	const struct klgd_command **temp;
 
 	if (!target) {
 		printk(KERN_NOTICE "Cannot append to NULL stream\n");
-		return false;
+		return -EINVAL;
 	}
 	if (!cmd) {
 		printk(KERN_NOTICE "Cannot append NULL cmd\n");
-		return false;
+		return -EINVAL;
 	}
 
 	temp = krealloc(target->commands, sizeof(struct klgd_command *) * (target->count + 1), GFP_KERNEL);
 	if (!temp)
-		return false;
+		return -ENOMEM;
 
 	target->commands = temp;
 	target->commands[target->count] = cmd;
 	target->count++;
 
-	return true;
+	return 0;
 }
 EXPORT_SYMBOL_GPL(klgd_append_cmd);
 
 
-bool klgd_append_stream(struct klgd_command_stream *target, const struct klgd_command_stream *source)
+int klgd_append_stream(struct klgd_command_stream *target, const struct klgd_command_stream *source)
 {
 	const struct klgd_command **temp;
 	size_t idx;
 
 	/* We got NULL command, skip it */
 	if (!source)
-		return true;
+		return 0;
 	/* We got command of zero length, skip it */
 	if (!source->count)
-		return true;
+		return 0;
 
 	temp = krealloc(target->commands, sizeof(struct klgd_command *) * (target->count + source->count), GFP_KERNEL);
 	if (!temp)
-		return false;
+		return -ENOMEM;
 
 	target->commands = temp;
 	for (idx = 0; idx < source->count; idx++)
 		target->commands[idx + target->count] = source->commands[idx];
 	target->count += source->count;
 
-	return true;
+	return 0;
 }
 EXPORT_SYMBOL_GPL(klgd_append_stream);
 
@@ -119,7 +119,7 @@ int klgd_build_command_stream(struct klgd_main_private *priv, struct klgd_comman
 	for (idx = 0; idx < priv->plugin_count; idx++) {
  		struct klgd_plugin *plugin = priv->plugins[idx];
 		struct klgd_command_stream *ss = plugin->get_commands(plugin, now);
-		if (!klgd_append_stream(*s, ss)) {
+		if (klgd_append_stream(*s, ss)) {
 			klgd_free_stream(*s);
 			return -EAGAIN;
 		}

@@ -18,7 +18,7 @@ struct klgd_plugin {
 	struct mutex *plugins_lock;
 
 	void (*deinit)(struct klgd_plugin *ctx);
-	struct klgd_command_stream *(*get_commands)(struct klgd_plugin *ctx, const unsigned long now);
+	int (*get_commands)(struct klgd_plugin *ctx, struct klgd_command_stream **s, const unsigned long now);
 	bool (*get_update_time)(struct klgd_plugin *ctx, const unsigned long now, unsigned long *t);
 	int (*init)(struct klgd_plugin *ctx);
 };

@@ -23,6 +23,8 @@ struct klgd_main_private {
 	struct mutex plugins_lock;
 	struct mutex send_lock;
 	struct workqueue_struct *wq;
+	bool endpoint_dead;
+	bool try_again;
 
 	int (*send_command_stream)(void *dev_ctx, const struct klgd_command_stream *stream);
 };
@@ -110,6 +112,7 @@ EXPORT_SYMBOL_GPL(klgd_append_stream);
 int klgd_build_command_stream(struct klgd_main_private *priv, struct klgd_command_stream **s)
 {
 	const unsigned long now = jiffies;
+	int ret = 0;
 	size_t idx;
 
 	*s = kzalloc(sizeof(struct klgd_command_stream), GFP_KERNEL);
@@ -118,17 +121,37 @@ int klgd_build_command_stream(struct klgd_main_private *priv, struct klgd_comman
 
 	for (idx = 0; idx < priv->plugin_count; idx++) {
 		struct klgd_plugin *plugin = priv->plugins[idx];
-		struct klgd_command_stream *ss = plugin->get_commands(plugin, now);
-		if (klgd_append_stream(*s, ss)) {
+		struct klgd_command_stream *ss;
+
+		ret = plugin->get_commands(plugin, &ss, now);
+		/* Unrecoverable error, ditch the stream and bail out. */
+		if (ret == -EFAULT) {
+			klgd_free_stream(ss);
 			klgd_free_stream(*s);
-			return -EAGAIN;
+			return -EFAULT;
 		}
+
+		if (klgd_append_stream(*s, ss)) {
+			/* We could not append the stream for the current plugin to the total stream.
+			 * This is bad because the plugin might have changed its internal state so we
+			 * cannot just ask it for that stream again. Cowardly bailing out is the only
+			 * safe thing to do. */
+			klgd_free_stream(ss);
+			klgd_free_stream(*s);
+			return -EFAULT;
+		}
+
+		/* Something happened while the plugin was building the command stream
+		 * but the error is recoverable. Send the incomplete command stream
+		 * and try again ASAP. */
+		if (ret == -EAGAIN)
+			break;
 	}
 
 	if ((*s)->count) {
 		priv->last_stream = *s;
 		printk(KERN_NOTICE "KLGD: Command stream built\n");
-		return 0;
+		return ret;
 	}
 	printk(KERN_NOTICE "KLGD: Command stream is empty\n");
 	return -ENOENT;
@@ -140,8 +163,9 @@ static void klgd_delayed_work(struct work_struct *w)
 	struct klgd_main_private *priv = container_of(dw, struct klgd_main_private, work);
 	struct klgd_command_stream *s;
 	unsigned long now;
-	int ret;
+	int ret, ret2;
 
+	priv->try_again = false;
 	printk(KERN_NOTICE "KLGD/WQ: --- WQ begins ---\n");
 	mutex_lock(&priv->send_lock);
 
@@ -155,13 +179,18 @@ static void klgd_delayed_work(struct work_struct *w)
 
 	switch (ret) {
 	case -EAGAIN:
-		/* Unable to build command stream right now, try again */
-		mutex_unlock(&priv->send_lock);
-		queue_delayed_work(priv->wq, &priv->work, TRYAGAIN_DELAY);
-		return;
+		/* Unable to build complete command stream right now, try again */
+		printk(KERN_WARNING "KLGD: Sending incomplete command stream and scheduling a new update ASAP.\n");
+		priv->try_again = true;
+		break;
 	case -ENOENT:
 		/* Empty command stream. Plugins have no work for us, exit */
 		goto out;
+	case -EFAULT:
+		/* Unrecoverable error, consider the endpoint dead */
+		printk(KERN_ERR "KLGD: Unrecoverable error while building command stream. No further commands will be sent to the device.\n");
+		priv->endpoint_dead = true;
+		mutex_unlock(&priv->send_lock);
 		return;
 	case 0:
 		break;
@@ -171,8 +200,8 @@ static void klgd_delayed_work(struct work_struct *w)
 	}
 
 	now = jiffies;	
-	ret = priv->send_command_stream(priv->device_context, s);
-	if (ret) {
+	ret2 = priv->send_command_stream(priv->device_context, s);
+	if (ret2) {
 		/* TODO: Error handling */
 		printk(KERN_NOTICE "KLGD/WQ: Unable to send command stream, ret code %d\n", ret);
 	} else
@@ -181,6 +210,11 @@ static void klgd_delayed_work(struct work_struct *w)
 
 out:
 	mutex_unlock(&priv->send_lock);
+
+	if (ret == -EAGAIN) {
+		queue_delayed_work(priv->wq, &priv->work, TRYAGAIN_DELAY);
+		return;
+	}
 
 	/* We're done submitting, check if there is some work for us in the future */
 	mutex_lock(&priv->plugins_lock);
@@ -361,6 +395,11 @@ static void klgd_schedule_update(struct klgd_main_private *priv)
 	unsigned int events = 0;
 	unsigned long earliest;
 	size_t idx;
+
+	/* Recovery update is scheduled. Do not allow any other updates until the recovery is done.
+	 * Also do not send updates to dead endpoint */
+	if (priv->try_again || priv->endpoint_dead)
+		return;
 
 	for (idx = 0; idx < priv->plugin_count; idx++) {
 		struct klgd_plugin *plugin = priv->plugins[idx];

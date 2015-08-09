@@ -1,7 +1,16 @@
-
+/**
+ *
+ * struct klgd_command
+ * @bytes: Payload
+ * @length: Number of bytes
+ * @user: Arbitrary data that are not to be sent to the device.
+ *	  This data will not be free'd automatically when the command
+ *	  stream gets disposed of.
+ */
 struct klgd_command {
 	__u8 * const bytes;
 	size_t length;
+	void *user;
 };
 
 struct klgd_command_stream {

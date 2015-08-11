@@ -16,7 +16,6 @@ struct klgd_main_private {
 	struct delayed_work work;
 	void *device_context;
 	unsigned long earliest_update;
-	struct klgd_command_stream *last_stream;
 	size_t plugin_count;
 	struct klgd_plugin **plugins;
 	bool *dontfree;
@@ -124,8 +123,14 @@ int klgd_build_command_stream(struct klgd_main_private *priv, struct klgd_comman
 		struct klgd_command_stream *ss;
 
 		ret = plugin->get_commands(plugin, &ss, now);
+		/* Something happened while the plugin was building the command stream
+		 * but the error is recoverable. Send the incomplete command stream
+		 * and try again ASAP. */
+		if (ret == -EAGAIN)
+			break;
+
 		/* Unrecoverable error, ditch the stream and bail out. */
-		if (ret == -EFAULT) {
+		if (ret) {
 			klgd_free_stream(ss);
 			klgd_free_stream(*s);
 			return -EFAULT;
@@ -140,16 +145,9 @@ int klgd_build_command_stream(struct klgd_main_private *priv, struct klgd_comman
 			klgd_free_stream(*s);
 			return -EFAULT;
 		}
-
-		/* Something happened while the plugin was building the command stream
-		 * but the error is recoverable. Send the incomplete command stream
-		 * and try again ASAP. */
-		if (ret == -EAGAIN)
-			break;
 	}
 
 	if ((*s)->count) {
-		priv->last_stream = *s;
 		printk(KERN_NOTICE "KLGD: Command stream built\n");
 		return ret;
 	}
@@ -163,7 +161,7 @@ static void klgd_delayed_work(struct work_struct *w)
 	struct klgd_main_private *priv = container_of(dw, struct klgd_main_private, work);
 	struct klgd_command_stream *s;
 	unsigned long now;
-	int ret, ret2;
+	int ret;
 
 	priv->try_again = false;
 	printk(KERN_NOTICE "KLGD/WQ: --- WQ begins ---\n");
@@ -186,24 +184,23 @@ static void klgd_delayed_work(struct work_struct *w)
 	case -ENOENT:
 		/* Empty command stream. Plugins have no work for us, exit */
 		goto out;
-	case -EFAULT:
-		/* Unrecoverable error, consider the endpoint dead */
-		printk(KERN_ERR "KLGD: Unrecoverable error while building command stream. No further commands will be sent to the device.\n");
-		priv->endpoint_dead = true;
-		mutex_unlock(&priv->send_lock);
-		return;
 	case 0:
 		break;
 	default:
-		/* TODO: Handle unspecified error */
-		break;
+		/* Unrecoverable error, consider the endpoint dead */
+		printk(KERN_ERR "KLGD: Unrecoverable error while building command stream, ret code %d. No further commands will be sent to the endpoint.\n", ret);
+		priv->endpoint_dead = true;
+		mutex_unlock(&priv->send_lock);
+		return;
 	}
 
-	now = jiffies;	
-	ret2 = priv->send_command_stream(priv->device_context, s);
-	if (ret2) {
-		/* TODO: Error handling */
-		printk(KERN_NOTICE "KLGD/WQ: Unable to send command stream, ret code %d\n", ret);
+	now = jiffies;
+	ret = priv->send_command_stream(priv->device_context, s);
+	if (ret) {
+		printk(KERN_ERR "KLGD/WQ: Unable to send command stream, ret code %d. Marking endpoint dead.\n", ret);
+		priv->endpoint_dead = true;
+		mutex_unlock(&priv->send_lock);
+		return;
 	} else
 		printk(KERN_NOTICE "KLGD/WQ: Commands sent, time elapsed %u [msec]\n", jiffies_to_msecs(jiffies - now));
 	kfree(s);
@@ -211,7 +208,7 @@ static void klgd_delayed_work(struct work_struct *w)
 out:
 	mutex_unlock(&priv->send_lock);
 
-	if (ret == -EAGAIN) {
+	if (priv->try_again) {
 		queue_delayed_work(priv->wq, &priv->work, TRYAGAIN_DELAY);
 		return;
 	}
@@ -318,7 +315,6 @@ int klgd_init(struct klgd_main *ctx, void *dev_ctx, int (*callback)(void *, cons
 	priv->plugin_count = plugin_count;
 
 	priv->device_context = dev_ctx;
-	priv->last_stream = NULL;
 	priv->send_command_stream = callback;
 
 	ctx->private = priv;
@@ -397,7 +393,7 @@ static void klgd_schedule_update(struct klgd_main_private *priv)
 	size_t idx;
 
 	/* Recovery update is scheduled. Do not allow any other updates until the recovery is done.
-	 * Also do not send updates to dead endpoint */
+	 * Also do not send updates to a dead endpoint */
 	if (priv->try_again || priv->endpoint_dead)
 		return;
 

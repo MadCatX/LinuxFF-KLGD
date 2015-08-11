@@ -4,13 +4,17 @@
  * @bytes: Payload
  * @length: Number of bytes
  * @user: Arbitrary data that are not to be sent to the device.
- *	  This data will not be free'd automatically when the command
- *	  stream gets disposed of.
+ *	  Note that any data pointed to by the ptr will not
+ *	  be free'd automatically when the command stream gets
+ *	  disposed of.
  */
 struct klgd_command {
 	__u8 * const bytes;
 	size_t length;
-	void *user;
+	union {
+		u32 data[2];
+		void *ptr;
+	} user;
 };
 
 struct klgd_command_stream {

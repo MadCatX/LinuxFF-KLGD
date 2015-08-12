@@ -12,7 +12,9 @@ struct klgd_command {
 	__u8 * const bytes;
 	size_t length;
 	union {
-		u32 data[2];
+		u32 ldata[2];
+		u16 sdata[4];
+		u8  cdata[8];
 		void *ptr;
 	} user;
 };

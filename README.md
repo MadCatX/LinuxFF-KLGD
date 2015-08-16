@@ -13,7 +13,7 @@ Whenever a userspace makes a call either by ioctl or by writing to the device th
 
 Solution
 ---
-KLGD decouples the process of handling userspace requests from the process of uploading these requests to devices. When a userspace request arrives, its result is stored within a plugin responsible for handling that request. The plugin then tells KLGD when(and if) it needs to deliver new data to the device. A simple design with a workqueue and two spinlocks makes sure that everything is kept in a consistent state. Spinlocking also ensures that no data will be sent to the device until the previous payload has been fully processed. KLGD however relies on the underlying hardware driver to not buffer or queue the outgoing payload anywhere.
+KLGD decouples the process of handling userspace requests from the process of uploading these requests to devices. When a userspace request arrives, its result is stored within a plugin responsible for handling that request. The plugin then tells KLGD when(and if) it needs to deliver new data to the device. A simple design with a workqueue and two mutexes makes sure that everything is kept in a consistent state. Locking also ensures that no data will be sent to the device until the previous payload has been fully processed. KLGD however relies on the underlying hardware driver to not buffer or queue the outgoing payload anywhere.
 Layout of the infrastructure involving KLGD looks like this: ![Linux FF scheme with KLGD](docs/Linux-FF-KLGD-scheme.png)
 
 Operation

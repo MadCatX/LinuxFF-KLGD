@@ -222,13 +222,14 @@ out:
 	printk(KERN_NOTICE "KLGD/WQ: --- WQ complete ---\n");
 }
 
-static void klgd_free_command(const struct klgd_command *cmd)
+void klgd_free_command(const struct klgd_command *cmd)
 {
 	if (cmd) {
 		kfree(cmd->bytes);
 		kfree(cmd);
 	}
 }
+EXPORT_SYMBOL_GPL(klgd_free_command);
 
 void klgd_free_stream(struct klgd_command_stream *s)
 {

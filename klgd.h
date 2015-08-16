@@ -43,6 +43,7 @@ struct klgd_command_stream * klgd_alloc_stream(void);
 int klgd_append_cmd(struct klgd_command_stream *target, const struct klgd_command *cmd);
 int klgd_append_stream(struct klgd_command_stream *target, const struct klgd_command_stream *source);
 void klgd_deinit(struct klgd_main *ctx);
+void klgd_free_command(const struct klgd_command *cmd);
 void klgd_free_stream(struct klgd_command_stream *s);
 int klgd_init(struct klgd_main *ctx, void *dev_ctx, int (*callback)(void *, const struct klgd_command_stream *), const unsigned long plugin_count);
 void klgd_lock_plugins(struct mutex *lock);

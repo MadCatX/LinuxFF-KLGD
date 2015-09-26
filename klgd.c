@@ -338,13 +338,6 @@ void klgd_lock_plugins(struct mutex *lock)
 }
 EXPORT_SYMBOL_GPL(klgd_lock_plugins);
 
-void klgd_lock_plugins_spin(struct mutex *lock)
-{
-	while (!mutex_trylock(lock));
-	printk(KERN_DEBUG "KLGD: Plugin state locked (spinning)\n");
-}
-EXPORT_SYMBOL_GPL(klgd_lock_plugins_spin);
-
 struct klgd_command * klgd_make_command(const char * const bytes, const size_t length)
 {
 	struct klgd_command *cmd = kzalloc(sizeof(struct klgd_command), GFP_KERNEL);

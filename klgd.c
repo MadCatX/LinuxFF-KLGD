@@ -163,17 +163,21 @@ static void klgd_delayed_work(struct work_struct *w)
 	unsigned long now;
 	int ret;
 
-	priv->try_again = false;
 	printk(KERN_NOTICE "KLGD/WQ: --- WQ begins ---\n");
 	mutex_lock(&priv->send_lock);
+	if (priv->endpoint_dead) {
+		printk(KERN_ERR "KLGD/WQ: Endpoint marked as dead, aborting\n");
+		mutex_unlock(&priv->send_lock);
+		return;
+	}
+	priv->try_again = false;
 
 	printk(KERN_NOTICE "KLGD/WQ: Timer fired and send_lock acquired\n");
 
 	mutex_lock(&priv->plugins_lock);
 	printk(KERN_NOTICE "KLGD/WQ: Plugins state locked - building command stream\n");
 	ret = klgd_build_command_stream(priv, &s);
-	mutex_unlock(&priv->plugins_lock);
-	printk(KERN_NOTICE "KLGD/WQ: Plugins state unlocked - command stream built\n");
+	printk(KERN_NOTICE "KLGD/WQ: Command stream built\n");
 
 	switch (ret) {
 	case -EAGAIN:
@@ -183,6 +187,8 @@ static void klgd_delayed_work(struct work_struct *w)
 		break;
 	case -ENOENT:
 		/* Empty command stream. Plugins have no work for us, exit */
+		mutex_unlock(&priv->plugins_lock);
+		printk(KERN_NOTICE "KLGD/WQ: Plugins state unlocked\n");
 		goto out;
 	case 0:
 		break;
@@ -190,14 +196,17 @@ static void klgd_delayed_work(struct work_struct *w)
 		/* Unrecoverable error, consider the endpoint dead */
 		printk(KERN_ERR "KLGD: Unrecoverable error while building command stream, ret code %d. No further commands will be sent to the endpoint.\n", ret);
 		priv->endpoint_dead = true;
+		mutex_unlock(&priv->plugins_lock);
 		mutex_unlock(&priv->send_lock);
 		return;
 	}
+	mutex_unlock(&priv->plugins_lock);
+	printk(KERN_NOTICE "KLGD/WQ: Plugins state unlocked\n");
 
 	now = jiffies;
 	ret = priv->send_command_stream(priv->device_context, s);
 	if (ret) {
-		printk(KERN_ERR "KLGD/WQ: Unable to send command stream, ret code %d. Marking endpoint dead.\n", ret);
+		printk(KERN_ERR "KLGD/WQ: Unable to send command stream, ret code %d. Marking endpoint as dead.\n", ret);
 		priv->endpoint_dead = true;
 		mutex_unlock(&priv->send_lock);
 		return;
@@ -418,7 +427,7 @@ static void klgd_schedule_update(struct klgd_main_private *priv)
 		if (ret)
 			printk(KERN_NOTICE "KLGD: Work canceled\n");
 		else
-			printk(KERN_NOTICE "KLGD: There was to work to cancel\n");
+			printk(KERN_NOTICE "KLGD: There was no work to cancel\n");
 	} else {
 		printk(KERN_NOTICE "Events: %u, earliest: %lu, now: %lu\n", events, earliest, now);
 		if (time_before(earliest, now))
@@ -426,7 +435,7 @@ static void klgd_schedule_update(struct klgd_main_private *priv)
 		else {
 			int ret = queue_delayed_work(priv->wq, &priv->work, earliest - now);
 			if (!ret) {
-				printk(KERN_WARNING "KLGD: Work was already on the queue!\n");
+				printk(KERN_NOTICE "KLGD: Work was already on the queue\n");
 			}
 		}
 	}
